@@ -1,0 +1,58 @@
+FROM centos:8 as builder
+
+ARG ZBX_VERSION=4.4.0
+ARG ZBX_SOURCES=https://git.zabbix.com/scm/zbx/zabbix.git
+
+ENV GOPATH=/opt/go
+
+RUN \
+  yum install -y epel-release \
+  && yum --quiet makecache \
+  && yum -y install \
+            autoconf \
+            automake \
+            libcurl-devel \
+            make \
+            openssl-devel \
+            openldap-devel \
+            zlib-devel \
+            pcre-devel \
+            git \
+            go \
+            gcc \
+  && mkdir -p /opt/go \
+  && chmod -R 777 /opt/go \
+  && echo 'export GOPATH=/opt/go' >> $HOME/.bashrc \
+  && git clone ${ZBX_SOURCES} --branch ${ZBX_VERSION} --depth 1 --single-branch zabbix-${ZBX_VERSION} \
+  && cd zabbix-${ZBX_VERSION} \
+  && ./bootstrap.sh \
+  && export CFLAGS="-fPIC -pie -Wl,-z,relro -Wl,-z,now" \
+  && ./configure --enable-agent2 \
+            --datadir=/usr/lib \
+            --libdir=/usr/lib/zabbix \
+            --prefix=/usr \
+            --sysconfdir=/etc/zabbix \
+            --prefix=/usr \
+            --enable-agent \
+            --with-libcurl \
+            --with-ldap \
+            --with-openssl \
+            --enable-ipv6 \
+            --silent
+
+COPY plugins/ zabbix-${ZBX_VERSION}/go/src/zabbix/plugins/
+
+RUN \
+  cd zabbix-${ZBX_VERSION} \
+  &&  make install \
+  &&  ls /usr/sbin/ | grep -q zabbix_agent2
+
+
+FROM centos:centos8
+LABEL maintainer="Monitorig Artist <info@monitoringartist.com>"
+
+STOPSIGNAL SIGTERM
+
+COPY --from=builder /usr/sbin/zabbix_agent2 /usr/sbin/zabbix_agent2
+COPY --from=builder /etc/zabbix/zabbix_agent2.conf /etc/zabbix/zabbix_agent2.conf
+CMD /usr/sbin/zabbix_agent2 -f
